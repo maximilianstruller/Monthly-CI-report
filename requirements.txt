@@ -1,0 +1,5 @@
+anthropic==0.52.0
+gspread==6.1.4
+google-auth==2.38.0
+requests==2.32.3
+beautifulsoup4==4.13.3
