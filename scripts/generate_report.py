@@ -171,7 +171,7 @@ Remember: Respond ONLY with valid JSON. No additional text."""
         "agent": {
             "name": "Competitive Intel Analyst",
             "instructions": ANALYSIS_INSTRUCTIONS,
-            "model": "claude-sonnet-4-5-20250929",
+            "model": "claude-sonnet-4-5@20250929",
             "capabilities": {},
         },
         "messages": [
