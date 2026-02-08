@@ -228,21 +228,27 @@ Remember: Respond ONLY with valid JSON. No additional text."""
             if not response_text:
                 response_text = str(data)
 
-            print(f"  Received analysis ({len(response_text)} chars)")
+                  print(f"  Received analysis ({len(response_text)} chars)")
 
-            # Parse the JSON response
-            try:
-                report_data = json.loads(response_text)
-            except json.JSONDecodeError:
-                cleaned = response_text.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:]
-                if cleaned.startswith("```"):
-                    cleaned = cleaned[3:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                report_data = json.loads(cleaned.strip())
+            # Parse the JSON response - handle various formats Claude might use
+            cleaned = response_text.strip()
 
+            # Remove markdown code blocks if present
+            if "```json" in cleaned:
+                cleaned = cleaned.split("```json", 1)[1]
+            if "```" in cleaned:
+                cleaned = cleaned.split("```")[0]
+
+            # Find the JSON object by locating first { and last }
+            start = cleaned.find("{")
+            end = cleaned.rfind("}")
+            if start != -1 and end != -1:
+                cleaned = cleaned[start:end + 1]
+
+            # Log first 200 chars for debugging
+            print(f"  JSON starts with: {cleaned[:200]}")
+
+            report_data = json.loads(cleaned)
             return report_data
 
         except requests.exceptions.ReadTimeout:
