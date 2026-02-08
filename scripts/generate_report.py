@@ -2,8 +2,8 @@
 Main report generation agent - ties web search and Excel output together.
 
 This script:
-1. Runs web searches for all competitors and industry trends
-2. Sends all findings to Claude with the competitive intelligence prompt
+1. Runs web searches for all competitors and industry trends (via Langdock Agents API)
+2. Sends all findings to Claude for structured analysis (via Langdock Agents API)
 3. Parses Claude's structured response into sections
 4. Writes everything to a formatted Excel file
 """
@@ -11,9 +11,10 @@ This script:
 import os
 import sys
 import json
+import uuid
 from datetime import datetime
 
-from anthropic import Anthropic
+import requests
 
 # Add parent directory to path so we can import sibling modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -22,11 +23,12 @@ from web_search import run_all_searches
 from excel_output import write_full_report
 
 
+LANGDOCK_AGENT_URL = "https://api.langdock.com/agent/v1/chat/completions"
+
 # ---------------------------------------------------------------------------
 # The full competitive intelligence analysis prompt
 # ---------------------------------------------------------------------------
-ANALYSIS_PROMPT = """
-ROLE: You are Remerge's Competitive Intelligence Analyst — a senior PMM/strategy
+ANALYSIS_INSTRUCTIONS = """You are Remerge's Competitive Intelligence Analyst — a senior PMM/strategy
 analyst specializing in mobile adtech and programmatic advertising. You produce
 institutional-grade competitive intelligence that informs product strategy, GTM
 positioning, and executive decision-making.
@@ -47,56 +49,6 @@ COMPETITOR WATCHLIST: Adikteev, Aarki, RevX, YouAppi
 Do NOT report on Remerge itself in the competitor sections. Remerge is analyzed only
 in the positioning comparison section.
 
-Based on the research data provided below, produce the following structured report.
-
-REQUIRED OUTPUT FORMAT:
-You MUST respond with valid JSON matching this exact structure. Do not include any
-text outside the JSON object.
-
-{
-  "executive_briefing": [
-    {"insight": "...", "impact": "HIGH|MEDIUM|LOW"}
-  ],
-  "competitors": [
-    {
-      "name": "Competitor Name",
-      "risk_level": "HIGH|MEDIUM|LOW",
-      "updates": "Key updates as text, separated by newlines",
-      "implication": "Strategic implication for Remerge",
-      "recommendation": "Recommended response",
-      "sources": "Source URLs, one per line"
-    }
-  ],
-  "risk_dashboard": {
-    "HIGH": [{"competitor": "...", "summary": "...", "impact": "..."}],
-    "MEDIUM": [{"competitor": "...", "summary": "...", "impact": "..."}],
-    "LOW": [{"competitor": "...", "summary": "...", "impact": "..."}]
-  },
-  "positioning_matrix": [
-    {
-      "dimension": "AI/ML Sophistication",
-      "remerge_rating": "Strong|Moderate|Developing",
-      "leaders": "Leader name(s)",
-      "gaps": "Gaps or opportunities"
-    }
-  ],
-  "strategic_synthesis": {
-    "themes": ["Theme 1", "Theme 2"],
-    "opportunities": ["Opportunity 1", "Opportunity 2"],
-    "vulnerabilities": ["Vulnerability 1", "Vulnerability 2"],
-    "recommendations": ["Recommendation 1", "Recommendation 2"]
-  }
-}
-
-DIMENSIONS FOR POSITIONING MATRIX:
-- AI/ML Sophistication
-- Privacy & Measurement Readiness
-- Retargeting Depth & Performance
-- Exchange/Supply Coverage
-- Pricing Transparency
-- Creative Optimization
-- Geographic Reach
-
 STRICT RULES:
 - NO HALLUCINATIONS. If uncertain, state "Unverified — requires confirmation."
 - Only report updates from the past 30 days unless essential historical context.
@@ -105,19 +57,21 @@ STRICT RULES:
 - Every source URL must be a direct permalink, not a homepage or generic page.
 - The executive briefing should have 5-8 bullets maximum.
 - The strategic synthesis recommendations should have 5 items maximum.
-"""
+
+You MUST respond with valid JSON matching the exact structure the user specifies.
+Do not include any text outside the JSON object."""
 
 
-def get_client():
-    """Create an Anthropic client configured for Langdock."""
+def get_headers():
+    """Get authorization headers for Langdock API."""
     api_key = os.environ.get("LANGDOCK_API_KEY")
     if not api_key:
         raise ValueError("LANGDOCK_API_KEY environment variable is not set")
 
-    return Anthropic(
-        base_url="https://api.langdock.com/anthropic/eu/",
-        api_key=api_key,
-    )
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
 
 def format_search_results(search_results):
@@ -144,12 +98,11 @@ def format_search_results(search_results):
     return "\n".join(sections)
 
 
-def analyze_findings(client, formatted_results):
+def analyze_findings(formatted_results):
     """
-    Send all search findings to Claude for structured analysis.
+    Send all search findings to Claude for structured analysis via Langdock Agents API.
 
     Args:
-        client: Anthropic client
         formatted_results: Formatted search results string
 
     Returns:
@@ -157,23 +110,114 @@ def analyze_findings(client, formatted_results):
     """
     user_message = f"""Here is the research data gathered from web searches over the
 past 30 days. Analyze this data and produce the competitive intelligence report
-in the exact JSON format specified.
+in the exact JSON format specified below.
+
+REQUIRED OUTPUT FORMAT:
+You MUST respond with valid JSON matching this exact structure. Do not include any
+text outside the JSON object.
+
+{{
+  "executive_briefing": [
+    {{"insight": "...", "impact": "HIGH|MEDIUM|LOW"}}
+  ],
+  "competitors": [
+    {{
+      "name": "Competitor Name",
+      "risk_level": "HIGH|MEDIUM|LOW",
+      "updates": "Key updates as text, separated by newlines",
+      "implication": "Strategic implication for Remerge",
+      "recommendation": "Recommended response",
+      "sources": "Source URLs, one per line"
+    }}
+  ],
+  "risk_dashboard": {{
+    "HIGH": [{{"competitor": "...", "summary": "...", "impact": "..."}}],
+    "MEDIUM": [{{"competitor": "...", "summary": "...", "impact": "..."}}],
+    "LOW": [{{"competitor": "...", "summary": "...", "impact": "..."}}]
+  }},
+  "positioning_matrix": [
+    {{
+      "dimension": "AI/ML Sophistication",
+      "remerge_rating": "Strong|Moderate|Developing",
+      "leaders": "Leader name(s)",
+      "gaps": "Gaps or opportunities"
+    }}
+  ],
+  "strategic_synthesis": {{
+    "themes": ["Theme 1", "Theme 2"],
+    "opportunities": ["Opportunity 1", "Opportunity 2"],
+    "vulnerabilities": ["Vulnerability 1", "Vulnerability 2"],
+    "recommendations": ["Recommendation 1", "Recommendation 2"]
+  }}
+}}
+
+DIMENSIONS FOR POSITIONING MATRIX:
+- AI/ML Sophistication
+- Privacy & Measurement Readiness
+- Retargeting Depth & Performance
+- Exchange/Supply Coverage
+- Pricing Transparency
+- Creative Optimization
+- Geographic Reach
 
 RESEARCH DATA:
 {formatted_results}
 
 Remember: Respond ONLY with valid JSON. No additional text."""
 
-    print("Sending findings to Claude for analysis...")
-    message = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=8192,
-        system=ANALYSIS_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
+    headers = get_headers()
 
-    response_text = message.content[0].text
-    print(f"Received analysis ({message.usage.output_tokens} tokens)")
+    payload = {
+        "agent": {
+            "name": "Competitive Intel Analyst",
+            "instructions": ANALYSIS_INSTRUCTIONS,
+            "model": "claude-sonnet-4-5-20250929",
+            "capabilities": {},
+        },
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": user_message,
+                    }
+                ],
+            }
+        ],
+    }
+
+    print("Sending findings to Claude for analysis...")
+    response = requests.post(LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=180)
+    response.raise_for_status()
+
+    data = response.json()
+
+    # Extract text from the response parts
+    response_text = ""
+    if "parts" in data:
+        for part in data["parts"]:
+            if part.get("type") == "text" and "text" in part:
+                response_text += part["text"]
+
+    if not response_text:
+        # Fallback: try other common response formats
+        if isinstance(data, dict):
+            if "text" in data:
+                response_text = data["text"]
+            elif "content" in data:
+                if isinstance(data["content"], str):
+                    response_text = data["content"]
+                elif isinstance(data["content"], list):
+                    for item in data["content"]:
+                        if isinstance(item, dict) and "text" in item:
+                            response_text += item["text"]
+
+    if not response_text:
+        response_text = str(data)
+
+    print(f"Received analysis response ({len(response_text)} chars)")
 
     # Parse the JSON response
     try:
@@ -205,9 +249,8 @@ def main():
 
     # Step 2: Analyze with Claude
     print("\n[2/3] Analyzing findings with Claude...")
-    client = get_client()
     formatted_results = format_search_results(search_results)
-    report_data = analyze_findings(client, formatted_results)
+    report_data = analyze_findings(formatted_results)
 
     # Add raw data for archival
     report_data["raw_data"] = formatted_results
