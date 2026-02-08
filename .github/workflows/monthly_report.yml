@@ -1,1 +1,37 @@
-# Monthly report automation - will be configured later
+name: Monthly Competitive Intelligence Report
+
+# Runs on the 1st of every month at 9:00 AM UTC
+# Can also be triggered manually from the GitHub Actions tab
+on:
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch:  # allows manual trigger
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate report
+        env:
+          LANGDOCK_API_KEY: ${{ secrets.LANGDOCK_API_KEY }}
+        run: python scripts/generate_report.py
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: competitive-intel-report
+          path: reports/*.xlsx
+          retention-days: 90
