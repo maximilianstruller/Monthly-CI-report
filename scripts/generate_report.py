@@ -241,6 +241,9 @@ Remember: Respond ONLY with valid JSON. No additional text."""
 
             print(f"  JSON starts with: {cleaned[:200]}")
 
+            # Handle escaped newlines and other characters
+            cleaned = cleaned.encode().decode('unicode_escape')
+
             report_data = json.loads(cleaned)
             return report_data
 
