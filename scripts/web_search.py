@@ -2,8 +2,7 @@
 Web search module - fetches market/competitor data using Langdock's Agent API
 with web search enabled.
 
-This module uses the Langdock Agents API with webSearch capability to search
-the web for recent competitor intelligence on each company in the watchlist.
+Uses gpt-4o-mini for web searches (fast, cheap, separate rate limit from Claude).
 """
 
 import os
@@ -15,7 +14,8 @@ import requests
 
 LANGDOCK_AGENT_URL = "https://api.langdock.com/agent/v1/chat/completions"
 REQUEST_TIMEOUT = 300  # 5 minutes per request
-MAX_RETRIES = 2
+MAX_RETRIES = 3
+SEARCH_MODEL = "gpt-4o-mini"  # Fast model for web search step
 
 
 def get_headers():
@@ -33,14 +33,7 @@ def get_headers():
 def call_agent(prompt, agent_name="Competitive Intel Researcher"):
     """
     Call the Langdock Agent API with web search enabled.
-    Includes retry logic for timeout errors.
-
-    Args:
-        prompt: The user message to send
-        agent_name: Name for the temporary agent
-
-    Returns:
-        The assistant's text response
+    Includes retry logic for timeout, server, and rate limit errors.
     """
     headers = get_headers()
 
@@ -54,7 +47,7 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                 "URLs for every claim. If you cannot find information, say so — do "
                 "not fabricate anything."
             ),
-            "model": "claude-sonnet-4-5@20250929",
+            "model": SEARCH_MODEL,
             "capabilities": {
                 "webSearch": True,
             },
@@ -75,13 +68,32 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            print(f"    API call attempt {attempt}...")
             response = requests.post(
                 LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=REQUEST_TIMEOUT
             )
 
-            # Print detailed error info if the request fails
+            # Retry on rate limit (429)
+            if response.status_code == 429:
+                wait_time = 90 * attempt
+                print(f"    Rate limited. Waiting {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+
+            # Retry on server errors (500, 502, 503, 504)
+            if response.status_code >= 500:
+                print(f"    Server error {response.status_code}: {response.text[:200]}")
+                if attempt < MAX_RETRIES:
+                    wait_time = 30 * attempt
+                    print(f"    Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return f"Search failed after {MAX_RETRIES} attempts (server error)."
+
+            # Print detailed error info for other errors
             if not response.ok:
-                print(f"ERROR {response.status_code}: {response.text}")
+                print(f"    ERROR {response.status_code}: {response.text}")
                 response.raise_for_status()
 
             data = response.json()
@@ -94,7 +106,6 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                         text_parts.append(part["text"])
 
             if not text_parts:
-                # Fallback: try other common response formats
                 if isinstance(data, dict):
                     if "text" in data:
                         text_parts.append(data["text"])
@@ -110,24 +121,19 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
             return result
 
         except requests.exceptions.ReadTimeout:
+            print(f"    Timeout on attempt {attempt}")
             if attempt < MAX_RETRIES:
-                print(f"  Timeout on attempt {attempt}, retrying in 10s...")
-                time.sleep(10)
+                wait_time = 30 * attempt
+                print(f"    Retrying in {wait_time}s...")
+                time.sleep(wait_time)
             else:
-                print(f"  Timeout on attempt {attempt}, giving up.")
                 return "Search timed out after multiple attempts. No data retrieved."
+
+    return "Search failed after all retry attempts."
 
 
 def search_competitor(competitor_name):
-    """
-    Search for recent news and updates about a specific competitor.
-
-    Args:
-        competitor_name: Name of the competitor to research
-
-    Returns:
-        dict with competitor name and raw findings text
-    """
+    """Search for recent news about a specific competitor."""
     search_prompt = f"""Search the web for the most recent news, updates, and announcements
 about {competitor_name} in the mobile advertising / adtech space from the past 30 days.
 
@@ -160,12 +166,7 @@ Do NOT fabricate or guess any information. Only report what you can verify."""
 
 
 def search_industry_trends():
-    """
-    Search for general mobile adtech industry trends and news.
-
-    Returns:
-        dict with industry trends findings
-    """
+    """Search for general mobile adtech industry trends."""
     trends_prompt = """Search the web for the most important mobile advertising and
 programmatic adtech industry trends and news from the past 30 days.
 
@@ -194,12 +195,7 @@ Only report verified information. Do NOT fabricate anything."""
 
 
 def run_all_searches():
-    """
-    Run web searches for all competitors and industry trends.
-
-    Returns:
-        dict containing all search results
-    """
+    """Run web searches for all competitors and industry trends."""
     competitors = ["Adikteev", "Aarki", "RevX", "YouAppi"]
 
     print("Starting web searches...")
@@ -210,6 +206,8 @@ def run_all_searches():
         result = search_competitor(competitor)
         results["competitors"].append(result)
         print(f"  Done with {competitor}")
+        print("  Waiting 60s before next search (rate limit)...")
+        time.sleep(60)
 
     print("  Searching for industry trends...")
     results["industry_trends"] = search_industry_trends()
@@ -221,7 +219,6 @@ def run_all_searches():
 
 if __name__ == "__main__":
     results = run_all_searches()
-    # Print a summary
     for comp in results["competitors"]:
         print(f"\n{'='*60}")
         print(f"COMPETITOR: {comp['competitor']}")
