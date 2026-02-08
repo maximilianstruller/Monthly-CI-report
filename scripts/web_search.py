@@ -1,33 +1,110 @@
 """
-Web search module - fetches market/competitor data using Claude's web search capabilities.
+Web search module - fetches market/competitor data using Langdock's Agent API
+with web search enabled.
 
-This module uses Claude (via Langdock) to search the web for recent competitor
-intelligence on each company in the watchlist.
+This module uses the Langdock Agents API with webSearch capability to search
+the web for recent competitor intelligence on each company in the watchlist.
 """
 
 import os
 import json
-from anthropic import Anthropic
+import uuid
+import requests
 
 
-def get_client():
-    """Create an Anthropic client configured for Langdock."""
+LANGDOCK_AGENT_URL = "https://api.langdock.com/agent/v1/chat/completions"
+
+
+def get_headers():
+    """Get authorization headers for Langdock API."""
     api_key = os.environ.get("LANGDOCK_API_KEY")
     if not api_key:
         raise ValueError("LANGDOCK_API_KEY environment variable is not set")
 
-    return Anthropic(
-        base_url="https://api.langdock.com/anthropic/eu/",
-        api_key=api_key,
-    )
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
 
-def search_competitor(client, competitor_name):
+def call_agent(prompt, agent_name="Competitive Intel Researcher"):
+    """
+    Call the Langdock Agent API with web search enabled.
+
+    Args:
+        prompt: The user message to send
+        agent_name: Name for the temporary agent
+
+    Returns:
+        The assistant's text response
+    """
+    headers = get_headers()
+
+    payload = {
+        "agent": {
+            "name": agent_name,
+            "instructions": (
+                "You are a competitive intelligence researcher specializing in "
+                "mobile adtech and programmatic advertising. Use web search to find "
+                "the most recent, verified information. Always provide direct source "
+                "URLs for every claim. If you cannot find information, say so — do "
+                "not fabricate anything."
+            ),
+            "model": "claude-sonnet-4-5-20250929",
+            "capabilities": {
+                "webSearch": True,
+            },
+        },
+        "messages": [
+            {
+                "id": str(uuid.uuid4()),
+                "role": "user",
+                "parts": [
+                    {
+                        "type": "text",
+                        "text": prompt,
+                    }
+                ],
+            }
+        ],
+    }
+
+    response = requests.post(LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=120)
+    response.raise_for_status()
+
+    data = response.json()
+
+    # Extract text from the response parts
+    text_parts = []
+    if "parts" in data:
+        for part in data["parts"]:
+            if part.get("type") == "text" and "text" in part:
+                text_parts.append(part["text"])
+
+    if not text_parts:
+        # Fallback: try other common response formats
+        if isinstance(data, dict):
+            # Try direct text field
+            if "text" in data:
+                text_parts.append(data["text"])
+            # Try content field
+            elif "content" in data:
+                if isinstance(data["content"], str):
+                    text_parts.append(data["content"])
+                elif isinstance(data["content"], list):
+                    for item in data["content"]:
+                        if isinstance(item, dict) and "text" in item:
+                            text_parts.append(item["text"])
+
+    result = "\n".join(text_parts) if text_parts else str(data)
+    return result
+
+
+def search_competitor(competitor_name):
     """
     Search for recent news and updates about a specific competitor.
 
     Args:
-        client: Anthropic client instance
         competitor_name: Name of the competitor to research
 
     Returns:
@@ -56,24 +133,17 @@ For EACH finding, provide:
 If you cannot find significant updates from the past 30 days, explicitly state that.
 Do NOT fabricate or guess any information. Only report what you can verify."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": search_prompt}],
-    )
+    findings = call_agent(search_prompt, agent_name=f"Research: {competitor_name}")
 
     return {
         "competitor": competitor_name,
-        "findings": message.content[0].text,
+        "findings": findings,
     }
 
 
-def search_industry_trends(client):
+def search_industry_trends():
     """
     Search for general mobile adtech industry trends and news.
-
-    Args:
-        client: Anthropic client instance
 
     Returns:
         dict with industry trends findings
@@ -97,15 +167,11 @@ For EACH finding, provide:
 
 Only report verified information. Do NOT fabricate anything."""
 
-    message = client.messages.create(
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=4096,
-        messages=[{"role": "user", "content": trends_prompt}],
-    )
+    findings = call_agent(trends_prompt, agent_name="Research: Industry Trends")
 
     return {
         "topic": "Industry Trends",
-        "findings": message.content[0].text,
+        "findings": findings,
     }
 
 
@@ -116,7 +182,6 @@ def run_all_searches():
     Returns:
         dict containing all search results
     """
-    client = get_client()
     competitors = ["Adikteev", "Aarki", "RevX", "YouAppi"]
 
     print("Starting web searches...")
@@ -124,12 +189,12 @@ def run_all_searches():
 
     for competitor in competitors:
         print(f"  Searching for {competitor}...")
-        result = search_competitor(client, competitor)
+        result = search_competitor(competitor)
         results["competitors"].append(result)
         print(f"  Done with {competitor}")
 
     print("  Searching for industry trends...")
-    results["industry_trends"] = search_industry_trends(client)
+    results["industry_trends"] = search_industry_trends()
     print("  Done with industry trends")
 
     print("All searches complete!")
