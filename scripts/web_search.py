@@ -70,8 +70,11 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
     }
 
     response = requests.post(LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=120)
-    response.raise_for_status()
 
+    # Print detailed error info if the request fails
+    if not response.ok:
+        print(f"ERROR {response.status_code}: {response.text}")
+        response.raise_for_status()
     data = response.json()
 
     # Extract text from the response parts
