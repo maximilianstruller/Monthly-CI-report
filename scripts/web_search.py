@@ -50,7 +50,7 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                 "URLs for every claim. If you cannot find information, say so — do "
                 "not fabricate anything."
             ),
-            "model": "claude-sonnet-4-5-20250929",
+            "model": "claude-sonnet-4-5@20250929",
             "capabilities": {
                 "webSearch": True,
             },
