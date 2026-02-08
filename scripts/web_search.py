@@ -9,10 +9,13 @@ the web for recent competitor intelligence on each company in the watchlist.
 import os
 import json
 import uuid
+import time
 import requests
 
 
 LANGDOCK_AGENT_URL = "https://api.langdock.com/agent/v1/chat/completions"
+REQUEST_TIMEOUT = 300  # 5 minutes per request
+MAX_RETRIES = 2
 
 
 def get_headers():
@@ -30,6 +33,7 @@ def get_headers():
 def call_agent(prompt, agent_name="Competitive Intel Researcher"):
     """
     Call the Langdock Agent API with web search enabled.
+    Includes retry logic for timeout errors.
 
     Args:
         prompt: The user message to send
@@ -69,38 +73,49 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
         ],
     }
 
-    response = requests.post(LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=120)
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = requests.post(
+                LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=REQUEST_TIMEOUT
+            )
 
-    # Print detailed error info if the request fails
-    if not response.ok:
-        print(f"ERROR {response.status_code}: {response.text}")
-        response.raise_for_status()
-    data = response.json()
+            # Print detailed error info if the request fails
+            if not response.ok:
+                print(f"ERROR {response.status_code}: {response.text}")
+                response.raise_for_status()
 
-    # Extract text from the response parts
-    text_parts = []
-    if "parts" in data:
-        for part in data["parts"]:
-            if part.get("type") == "text" and "text" in part:
-                text_parts.append(part["text"])
+            data = response.json()
 
-    if not text_parts:
-        # Fallback: try other common response formats
-        if isinstance(data, dict):
-            # Try direct text field
-            if "text" in data:
-                text_parts.append(data["text"])
-            # Try content field
-            elif "content" in data:
-                if isinstance(data["content"], str):
-                    text_parts.append(data["content"])
-                elif isinstance(data["content"], list):
-                    for item in data["content"]:
-                        if isinstance(item, dict) and "text" in item:
-                            text_parts.append(item["text"])
+            # Extract text from the response parts
+            text_parts = []
+            if "parts" in data:
+                for part in data["parts"]:
+                    if part.get("type") == "text" and "text" in part:
+                        text_parts.append(part["text"])
 
-    result = "\n".join(text_parts) if text_parts else str(data)
-    return result
+            if not text_parts:
+                # Fallback: try other common response formats
+                if isinstance(data, dict):
+                    if "text" in data:
+                        text_parts.append(data["text"])
+                    elif "content" in data:
+                        if isinstance(data["content"], str):
+                            text_parts.append(data["content"])
+                        elif isinstance(data["content"], list):
+                            for item in data["content"]:
+                                if isinstance(item, dict) and "text" in item:
+                                    text_parts.append(item["text"])
+
+            result = "\n".join(text_parts) if text_parts else str(data)
+            return result
+
+        except requests.exceptions.ReadTimeout:
+            if attempt < MAX_RETRIES:
+                print(f"  Timeout on attempt {attempt}, retrying in 10s...")
+                time.sleep(10)
+            else:
+                print(f"  Timeout on attempt {attempt}, giving up.")
+                return "Search timed out after multiple attempts. No data retrieved."
 
 
 def search_competitor(competitor_name):
@@ -212,4 +227,3 @@ if __name__ == "__main__":
         print(f"COMPETITOR: {comp['competitor']}")
         print(f"{'='*60}")
         print(comp["findings"][:500] + "...")
-
