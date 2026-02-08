@@ -33,7 +33,7 @@ def get_headers():
 def call_agent(prompt, agent_name="Competitive Intel Researcher"):
     """
     Call the Langdock Agent API with web search enabled.
-    Includes retry logic for timeout and server errors.
+    Includes retry logic for timeout, server, and rate limit errors.
 
     Args:
         prompt: The user message to send
@@ -79,11 +79,18 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                 LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=REQUEST_TIMEOUT
             )
 
+            # Retry on rate limit (429)
+            if response.status_code == 429:
+                wait_time = 90 * attempt  # 90s, 180s, 270s
+                print(f"  Rate limited on attempt {attempt}. Waiting {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+
             # Retry on server errors (500, 502, 503, 504)
             if response.status_code >= 500:
                 print(f"  Server error {response.status_code} on attempt {attempt}: {response.text[:200]}")
                 if attempt < MAX_RETRIES:
-                    wait_time = 30 * attempt  # 30s, 60s, 90s
+                    wait_time = 30 * attempt
                     print(f"  Retrying in {wait_time}s...")
                     time.sleep(wait_time)
                     continue
@@ -106,7 +113,6 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                         text_parts.append(part["text"])
 
             if not text_parts:
-                # Fallback: try other common response formats
                 if isinstance(data, dict):
                     if "text" in data:
                         text_parts.append(data["text"])
@@ -131,16 +137,12 @@ def call_agent(prompt, agent_name="Competitive Intel Researcher"):
                 print(f"  Giving up after {MAX_RETRIES} attempts.")
                 return "Search timed out after multiple attempts. No data retrieved."
 
+    return "Search failed after all retry attempts."
+
 
 def search_competitor(competitor_name):
     """
     Search for recent news and updates about a specific competitor.
-
-    Args:
-        competitor_name: Name of the competitor to research
-
-    Returns:
-        dict with competitor name and raw findings text
     """
     search_prompt = f"""Search the web for the most recent news, updates, and announcements
 about {competitor_name} in the mobile advertising / adtech space from the past 30 days.
@@ -176,9 +178,6 @@ Do NOT fabricate or guess any information. Only report what you can verify."""
 def search_industry_trends():
     """
     Search for general mobile adtech industry trends and news.
-
-    Returns:
-        dict with industry trends findings
     """
     trends_prompt = """Search the web for the most important mobile advertising and
 programmatic adtech industry trends and news from the past 30 days.
@@ -210,9 +209,6 @@ Only report verified information. Do NOT fabricate anything."""
 def run_all_searches():
     """
     Run web searches for all competitors and industry trends.
-
-    Returns:
-        dict containing all search results
     """
     competitors = ["Adikteev", "Aarki", "RevX", "YouAppi"]
 
@@ -224,9 +220,10 @@ def run_all_searches():
         result = search_competitor(competitor)
         results["competitors"].append(result)
         print(f"  Done with {competitor}")
-        # Pause between requests to avoid overloading the API
-        print("  Waiting 15s before next search...")
-        time.sleep(15)
+        # Wait 75 seconds between requests to stay under rate limit
+        # (60,000 tokens per minute for claude-sonnet-4-5)
+        print("  Waiting 75s before next search (rate limit)...")
+        time.sleep(75)
 
     print("  Searching for industry trends...")
     results["industry_trends"] = search_industry_trends()
@@ -238,7 +235,6 @@ def run_all_searches():
 
 if __name__ == "__main__":
     results = run_all_searches()
-    # Print a summary
     for comp in results["competitors"]:
         print(f"\n{'='*60}")
         print(f"COMPETITOR: {comp['competitor']}")
