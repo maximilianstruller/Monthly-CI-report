@@ -25,12 +25,9 @@ from excel_output import write_full_report
 
 
 LANGDOCK_AGENT_URL = "https://api.langdock.com/agent/v1/chat/completions"
-ANALYSIS_MODEL = "claude-sonnet-4-5@20250929"  # Smart model for analysis
+ANALYSIS_MODEL = "claude-sonnet-4-5@20250929"
 MAX_RETRIES = 3
 
-# ---------------------------------------------------------------------------
-# The full competitive intelligence analysis prompt
-# ---------------------------------------------------------------------------
 ANALYSIS_INSTRUCTIONS = """You are Remerge's Competitive Intelligence Analyst — a senior PMM/strategy
 analyst specializing in mobile adtech and programmatic advertising. You produce
 institutional-grade competitive intelligence that informs product strategy, GTM
@@ -182,14 +179,12 @@ Remember: Respond ONLY with valid JSON. No additional text."""
                 LANGDOCK_AGENT_URL, headers=headers, json=payload, timeout=300
             )
 
-            # Retry on rate limit (429)
             if response.status_code == 429:
                 wait_time = 90 * attempt
                 print(f"  Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
 
-            # Retry on server errors
             if response.status_code >= 500:
                 print(f"  Server error {response.status_code}: {response.text[:200]}")
                 if attempt < MAX_RETRIES:
@@ -206,7 +201,6 @@ Remember: Respond ONLY with valid JSON. No additional text."""
 
             data = response.json()
 
-            # Extract text from the response parts
             response_text = ""
             if "parts" in data:
                 for part in data["parts"]:
@@ -228,9 +222,9 @@ Remember: Respond ONLY with valid JSON. No additional text."""
             if not response_text:
                 response_text = str(data)
 
-                  print(f"  Received analysis ({len(response_text)} chars)")
+            print(f"  Received analysis ({len(response_text)} chars)")
 
-            # Parse the JSON response - handle various formats Claude might use
+            # Parse JSON - handle various formats Claude might use
             cleaned = response_text.strip()
 
             # Remove markdown code blocks if present
@@ -245,7 +239,6 @@ Remember: Respond ONLY with valid JSON. No additional text."""
             if start != -1 and end != -1:
                 cleaned = cleaned[start:end + 1]
 
-            # Log first 200 chars for debugging
             print(f"  JSON starts with: {cleaned[:200]}")
 
             report_data = json.loads(cleaned)
@@ -270,19 +263,15 @@ def main():
     print(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 60)
 
-    # Step 1: Run web searches (uses gpt-4o-mini)
     print("\n[1/3] Running web searches...")
     search_results = run_all_searches()
 
-    # Step 2: Analyze with Claude (uses claude-sonnet-4-5)
     print("\n[2/3] Analyzing findings with Claude...")
     formatted_results = format_search_results(search_results)
     report_data = analyze_findings(formatted_results)
 
-    # Add raw data for archival
     report_data["raw_data"] = formatted_results
 
-    # Step 3: Write to Excel
     print("\n[3/3] Writing report to Excel...")
     filepath = write_full_report(report_data)
 
